@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: aob_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aob_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aob_password}
+      POSTGRES_DB: ${POSTGRES_DB:-aob_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aob_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: aob_backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aob_user}:${POSTGRES_PASSWORD:-aob_password}@postgres:5432/${POSTGRES_DB:-aob_db}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: aob_n8n
+    restart: always
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:-admin123}
+      WEBHOOK_URL: http://localhost:5678
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      GENERIC_TIMEZONE: Asia/Beirut
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/home/node/.n8n/workflows
+    depends_on:
+      - backend
+
+  dashboard:
+    build: ./dashboard
+    container_name: aob_dashboard
+    restart: always
+    env_file:
+      - .env
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./dashboard:/app
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  n8n_data:

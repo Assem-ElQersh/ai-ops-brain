@@ -1,0 +1,126 @@
+{
+  "name": "AOB — Customer Support Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-ticket",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook — Receive Ticket",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "aob-support-ticket"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Validate and normalize the incoming ticket payload\nconst body = $input.first().json;\nconst required = ['customer_name', 'customer_email', 'subject', 'message'];\nfor (const field of required) {\n  if (!body[field]) {\n    throw new Error(`Missing required field: ${field}`);\n  }\n}\nconst emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nif (!emailRegex.test(body.customer_email)) {\n  throw new Error('Invalid customer_email format');\n}\nreturn [{\n  json: {\n    customer_name: body.customer_name.trim(),\n    customer_email: body.customer_email.toLowerCase().trim(),\n    subject: body.subject.trim(),\n    message: body.message.trim(),\n    source: 'n8n_webhook',\n    received_at: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Validate & Normalize",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/tickets/webhook",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "customer_name": "={{ $json.customer_name }}",
+          "customer_email": "={{ $json.customer_email }}",
+          "subject": "={{ $json.subject }}",
+          "message": "={{ $json.message }}",
+          "source": "n8n_webhook"
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "POST to AI Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse the backend response and determine routing\nconst response = $input.first().json;\nconst ticket_id = response.ticket_id;\nconst success = response.success;\nreturn [{\n  json: {\n    ticket_id,\n    success,\n    summary: response.summary || 'Processing in background',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"accepted\", \"ticket_id\": \"{{ $json.ticket_id }}\", \"message\": \"Your request is being processed. You will receive an email shortly.\" }"
+      },
+      "name": "Respond 202 Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"error\", \"message\": \"Failed to process ticket. Please try again.\" }",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "name": "Respond 500 Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 400]
+    }
+  ],
+  "connections": {
+    "Webhook — Receive Ticket": {
+      "main": [[{"node": "Validate & Normalize", "type": "main", "index": 0}]]
+    },
+    "Validate & Normalize": {
+      "main": [[{"node": "POST to AI Backend", "type": "main", "index": 0}]]
+    },
+    "POST to AI Backend": {
+      "main": [[{"node": "Parse Response", "type": "main", "index": 0}]]
+    },
+    "Parse Response": {
+      "main": [[{"node": "Success?", "type": "main", "index": 0}]]
+    },
+    "Success?": {
+      "main": [
+        [{"node": "Respond 202 Accepted", "type": "main", "index": 0}],
+        [{"node": "Respond 500 Error", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": ["support", "automation", "ai"]
+}
