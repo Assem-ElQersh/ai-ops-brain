@@ -77,7 +77,7 @@ Home services companies receive hundreds of customer complaints daily. Manual tr
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ai-ops-brain.git
+git clone https://github.com/Assem-ElQersh/ai-ops-brain.git
 cd ai-ops-brain
 
 cp .env.example .env
