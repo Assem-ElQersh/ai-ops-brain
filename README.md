@@ -254,4 +254,4 @@ Total time from submission to email delivery: **~10 seconds**
 
 ## License
 
-MIT
+MIT License. See the [LICENSE](LICENSE) file for details.
