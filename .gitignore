@@ -19,3 +19,7 @@ n8n_data/
 .vscode/
 .idea/
 *.swp
+
+# Linux socket/pipe pseudo-files (never commit these)
+socket:*
+pipe:*
