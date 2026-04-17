@@ -19,24 +19,24 @@ Home services companies receive hundreds of customer complaints daily. Manual tr
                         ┌─────────────────────────────────────────────────────┐
                         │              AI Operations Brain                    │
                         │                                                     │
-  Customer/Form ──POST──►  n8n Webhook  ──► Validate & Normalize             │
+  Customer/Form ──POST──►  n8n Webhook  ──► Validate & Normalize              │
                         │       │                                             │
                         │       ▼                                             │
                         │  FastAPI Backend  (POST /tickets/webhook)           │
                         │       │                                             │
                         │       ▼                                             │
-                        │  ┌─────────────────────────────────────────┐       │
-                        │  │       Mistral Tool-Calling Agent        │       │
-                        │  │                                          │       │
+                        │  ┌───────────────────────────────────────────┐      │
+                        │  │       Mistral Tool-Calling Agent          │      │
+                        │  │                                           │      │
                         │  │  1. get_customer_profile    ──► PostgreSQL│      │
                         │  │  2. assess_and_classify     ──► PostgreSQL│      │
                         │  │  3. draft_response          ──► PostgreSQL│      │
                         │  │  4. send_auto_reply         ──► SMTP/Email│      │
                         │  │  5. escalate_to_slack/email ──► Slack/SMTP│      │
                         │  │  6. self_evaluate_resolve   ──► PostgreSQL│      │
-                        │  └─────────────────────────────────────────┘       │
+                        │  └───────────────────────────────────────────┘      │
                         │                                                     │
-                        │  Streamlit Dashboard  ◄──GET── FastAPI /tickets    │
+                        │  Streamlit Dashboard  ◄──GET── FastAPI /tickets     │
                         │  (live monitoring, logs, manual submission)         │
                         └─────────────────────────────────────────────────────┘
 ```
