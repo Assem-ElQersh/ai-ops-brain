@@ -1,7 +1,7 @@
 # AI Operations Brain (AOB)
 ### Customer Support Automation — End-to-End AI Pipeline
 
-> A production-grade automation system that **observes, classifies, and resolves** incoming customer support tickets using LangChain agents, OpenAI, n8n orchestration, and real integrations — no human required for routine cases.
+> A production-grade automation system that **observes, classifies, and resolves** incoming customer support tickets using a Mistral tool-calling agent, n8n orchestration, and real integrations — no human required for routine cases.
 
 ---
 
@@ -26,15 +26,14 @@ Home services companies receive hundreds of customer complaints daily. Manual tr
                         │       │                                             │
                         │       ▼                                             │
                         │  ┌─────────────────────────────────────────┐       │
-                        │  │         LangChain ReAct Agent            │       │
+                        │  │       Mistral Tool-Calling Agent        │       │
                         │  │                                          │       │
-                        │  │  1. query_customer_history  ──► PostgreSQL│      │
-                        │  │  2. classify_ticket         ──► PostgreSQL│      │
+                        │  │  1. get_customer_profile    ──► PostgreSQL│      │
+                        │  │  2. assess_and_classify     ──► PostgreSQL│      │
                         │  │  3. draft_response          ──► PostgreSQL│      │
                         │  │  4. send_auto_reply         ──► SMTP/Email│      │
-                        │  │  5. escalate_to_slack       ──► Slack API │      │
-                        │  │     (if urgency: high/critical)           │      │
-                        │  │  6. mark_resolved           ──► PostgreSQL│      │
+                        │  │  5. escalate_to_slack/email ──► Slack/SMTP│      │
+                        │  │  6. self_evaluate_resolve   ──► PostgreSQL│      │
                         │  └─────────────────────────────────────────┘       │
                         │                                                     │
                         │  Streamlit Dashboard  ◄──GET── FastAPI /tickets    │
@@ -49,7 +48,7 @@ Home services companies receive hundreds of customer complaints daily. Manual tr
 | **Input** | n8n Webhook | Receives tickets from any source (form, CRM, API) |
 | **Validation** | n8n Function Node | Validates and normalizes payload |
 | **Orchestration** | FastAPI (Python) | Persists ticket, kicks off agent in background |
-| **Intelligence** | LangChain ReAct Agent | Reasons over ticket, selects and executes tools |
+| **Intelligence** | Mistral Tool-Calling Agent | Goal-based reasoning and dynamic tool selection |
 | **LLM** | Mistral (mistral-small-latest) | Powers classification, response drafting, reasoning |
 | **Memory** | PostgreSQL | Stores tickets, action logs, customer history |
 | **Notifications** | aiosmtplib + httpx | Sends email replies + Slack escalation alerts |
@@ -63,7 +62,7 @@ Home services companies receive hundreds of customer complaints daily. Manual tr
 |---|---|
 | **n8n** | Workflow orchestrator, webhook receiver |
 | **FastAPI** | REST API backend |
-| **LangChain** | ReAct agent framework + tool use |
+| **mistralai SDK** | Native tool-calling loop + agent orchestration |
 | **Mistral AI** | Classification, reasoning, response drafting |
 | **PostgreSQL** | Persistent storage (tickets, logs, history) |
 | **SQLAlchemy** | ORM + migrations |
@@ -92,13 +91,13 @@ docker compose up --build
 
 | Service | URL |
 |---|---|
-| FastAPI backend + docs | http://localhost:8000/docs |
-| n8n workflow editor | http://localhost:5678 |
-| Streamlit dashboard | http://localhost:8501 |
+| FastAPI backend + docs | http://localhost:8001/docs |
+| n8n workflow editor | http://localhost:5679 |
+| Streamlit dashboard | http://localhost:8502 |
 
 ### 3. Import the n8n workflow
 
-1. Open http://localhost:5678 (login: `admin` / `admin123`)
+1. Open http://localhost:5679 (login from `.env`: `N8N_USER` / `N8N_PASSWORD`)
 2. Go to **Workflows → Import from File**
 3. Import `n8n/workflows/customer_support.json`
 4. Activate the workflow
@@ -106,7 +105,7 @@ docker compose up --build
 ### 4. Submit a test ticket
 
 ```bash
-curl -X POST http://localhost:8000/tickets/ \
+curl -X POST http://localhost:8001/tickets/ \
   -H "Content-Type: application/json" \
   -d '{
     "customer_name": "Sarah Al-Hassan",
@@ -122,18 +121,18 @@ Or use the **Submit Ticket** tab in the Streamlit dashboard.
 
 ## How the Agent Works
 
-The LangChain ReAct agent receives a ticket and autonomously executes this sequence:
+The Mistral agent receives a ticket and executes tools dynamically based on ticket context:
 
 ```
-1. query_customer_history  → checks if this is a repeat offender case
-2. classify_ticket         → assigns urgency (low/medium/high/critical) + category
-3. draft_response          → writes a professional, empathetic reply
-4. send_auto_reply         → delivers reply via email
-5. escalate_to_slack       → fires Slack alert (ONLY if high/critical)
-6. mark_resolved           → closes the ticket with a resolution note
+1. get_customer_profile        → history + repeat pattern context
+2. assess_and_classify         → urgency/category + VIP/churn risk
+3. draft_response              → empathetic, policy-aware reply
+4. send_auto_reply             → delivers email response
+5. escalate_to_slack/email     → escalates high-risk cases with fallback
+6. self_evaluate_and_resolve   → closes ticket with self-score + notes
 ```
 
-Every step writes to the database. No silent failures.
+Every step writes to the database. Failures are logged with fallback behavior.
 
 ### Urgency Rules (built into system prompt)
 
@@ -172,7 +171,7 @@ Full ticket detail with actions log.
 ### GET `/logs/actions`
 All agent action logs (email sent, Slack alerts, classifications, etc.)
 
-Full interactive docs at **http://localhost:8000/docs**.
+Full interactive docs at **http://localhost:8001/docs**.
 
 ---
 
@@ -187,8 +186,8 @@ ai-ops-brain/
 │   ├── main.py                 # FastAPI app entry point
 │   ├── config.py               # Settings (pydantic-settings)
 │   ├── agents/
-│   │   ├── support_agent.py    # LangChain ReAct agent
-│   │   └── tools.py            # Agent tools (classify, email, slack, DB)
+│   │   ├── support_agent.py    # Mistral native tool-calling agent
+│   │   └── tools.py            # Agent tools (profile, classify, email, slack, DB)
 │   ├── api/
 │   │   ├── tickets.py          # Ticket CRUD + webhook endpoint
 │   │   └── logs.py             # Action log endpoints
@@ -218,10 +217,18 @@ ai-ops-brain/
 | `SMTP_HOST` | Optional | SMTP server (default: smtp.gmail.com) |
 | `SMTP_USER` | Optional | SMTP username |
 | `SMTP_PASSWORD` | Optional | SMTP app password |
+| `N8N_USER` | Optional | n8n web UI/basic auth username |
+| `N8N_PASSWORD` | Optional | n8n web UI/basic auth password |
 | `POSTGRES_USER` | Optional | DB user (default: aob_user) |
 | `POSTGRES_PASSWORD` | Optional | DB password (default: aob_password) |
 
 If Slack/email is not configured, the system **logs a warning and continues** — it will not crash.
+
+After changing `.env`, recreate backend to reload env values:
+
+```bash
+docker compose up -d --force-recreate backend
+```
 
 ---
 

@@ -10,6 +10,8 @@ build/
 
 # Environment — never commit real secrets
 .env
+.env.*
+!.env.example
 
 # Docker volumes (if accidentally created locally)
 postgres_data/
@@ -18,7 +20,12 @@ n8n_data/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
+
+# OS / runtime artifacts
+.DS_Store
+*.log
 
 # Linux socket/pipe pseudo-files (never commit these)
 socket:*
