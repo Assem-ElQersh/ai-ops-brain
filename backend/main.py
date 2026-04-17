@@ -9,6 +9,8 @@ from config import get_settings
 from db.database import init_db
 from api.tickets import router as tickets_router
 from api.logs import router as logs_router
+from api.feedback import router as feedback_router
+from api.insights import router as insights_router
 from services.ticket_queue import ticket_queue
 
 settings = get_settings()
@@ -52,6 +54,8 @@ app.add_middleware(
 
 app.include_router(tickets_router)
 app.include_router(logs_router)
+app.include_router(feedback_router)
+app.include_router(insights_router)
 
 
 @app.get("/health")

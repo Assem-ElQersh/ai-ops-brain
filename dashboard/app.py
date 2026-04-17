@@ -12,7 +12,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
 
 st.set_page_config(
     page_title="AI Operations Brain",
@@ -22,6 +22,39 @@ st.set_page_config(
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=30)
+def fetch_insights() -> dict:
+    try:
+        r = httpx.get(f"{BACKEND_URL}/insights/", timeout=8)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=30)
+def fetch_feedback_stats() -> dict:
+    try:
+        r = httpx.get(f"{BACKEND_URL}/feedback/stats/summary", timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return {}
+
+
+def submit_feedback(ticket_id: str, score: int, comment: str) -> dict:
+    try:
+        r = httpx.post(
+            f"{BACKEND_URL}/feedback/{ticket_id}",
+            json={"score": score, "comment": comment},
+            timeout=5,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @st.cache_data(ttl=10)
 def fetch_stats() -> dict:
@@ -92,7 +125,7 @@ with st.sidebar:
 
     page = st.radio(
         "Navigate",
-        ["📊 Dashboard", "🎫 Tickets", "📋 Action Logs", "➕ Submit Ticket"],
+        ["📊 Dashboard", "🎫 Tickets", "📋 Action Logs", "🧠 Insights", "➕ Submit Ticket"],
         label_visibility="collapsed",
     )
 
@@ -255,6 +288,27 @@ elif page == "🎫 Tickets":
                             f"{'✅' if action['status'] == 'success' else '❌'} {action.get('detail', '')}"
                         )
 
+                if t.get("status") in ("resolved", "escalated") and not t.get("satisfaction_score"):
+                    st.write("**Submit Customer Feedback:**")
+                    fb_col1, fb_col2 = st.columns([1, 3])
+                    with fb_col1:
+                        score = st.select_slider(
+                            "Score", options=[1, 2, 3, 4, 5],
+                            value=3, key=f"score_{t['id']}"
+                        )
+                    with fb_col2:
+                        comment = st.text_input("Comment (optional)", key=f"comment_{t['id']}")
+                    if st.button("Submit Feedback", key=f"fb_{t['id']}"):
+                        res = submit_feedback(t["id"], score, comment)
+                        if res.get("error"):
+                            st.error(res["error"])
+                        else:
+                            st.success(res.get("message", "Feedback submitted!"))
+                            st.cache_data.clear()
+                elif t.get("satisfaction_score"):
+                    stars = "⭐" * t["satisfaction_score"]
+                    st.caption(f"Customer rated: {stars} ({t['satisfaction_score']}/5)")
+
 # ── Page: Action Logs ─────────────────────────────────────────────────────────
 
 elif page == "📋 Action Logs":
@@ -299,6 +353,93 @@ elif page == "📋 Action Logs":
         fig = px.bar(counts, x="action_type", y="count", color="action_type")
         fig.update_layout(showlegend=False, height=220)
         st.plotly_chart(fig, use_container_width=True)
+
+# ── Page: Insights ────────────────────────────────────────────────────────────
+
+elif page == "🧠 Insights":
+    st.title("🧠 Business Insight Engine")
+    st.caption("Anomaly detection, pattern analysis, and actionable recommendations — updated every 30 seconds.")
+
+    data = fetch_insights()
+    fb_stats = fetch_feedback_stats()
+
+    if not data:
+        st.warning("Cannot reach backend.")
+        st.stop()
+
+    s = data.get("summary", {})
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("This Week", s.get("tickets_this_week", 0))
+    vol_change = s.get("volume_change_pct")
+    col2.metric("vs Last Week", s.get("tickets_last_week", 0),
+                delta=f"{vol_change:+.1f}%" if vol_change is not None else None,
+                delta_color="inverse")
+    col3.metric("Critical", s.get("critical_tickets", 0), delta_color="inverse")
+    col4.metric("High Churn Open", s.get("high_churn_open", 0), delta_color="inverse")
+    col5.metric("Failed", s.get("failed_tickets", 0), delta_color="inverse")
+
+    st.divider()
+
+    # Resolution quality
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("Resolution Quality")
+        agent_score = s.get("avg_agent_self_score")
+        cust_score = fb_stats.get("avg_satisfaction") or s.get("avg_customer_satisfaction")
+        if agent_score:
+            st.metric("Agent Self-Score (avg)", f"{agent_score}/5")
+        if cust_score:
+            st.metric("Customer Satisfaction (avg)", f"{cust_score}/5",
+                      delta=f"{cust_score - agent_score:+.1f} vs agent" if agent_score else None)
+        if fb_stats.get("score_distribution"):
+            dist = fb_stats["score_distribution"]
+            dist_df = pd.DataFrame(
+                [{"score": k, "count": v} for k, v in dist.items()]
+            ).sort_values("score")
+            fig = px.bar(dist_df, x="score", y="count", color="score",
+                         color_continuous_scale=["red", "orange", "yellow", "lightgreen", "green"])
+            fig.update_layout(height=200, margin=dict(t=0, b=0), showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+    with col_b:
+        st.subheader("Top Issue Categories (This Week)")
+        cats = data.get("top_categories", [])
+        if cats:
+            cat_df = pd.DataFrame(cats)
+            fig = px.bar(cat_df, x="count", y="category", orientation="h",
+                         color="count", color_continuous_scale="Reds")
+            fig.update_layout(height=220, margin=dict(t=0, b=0), showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # Recommendations
+    st.subheader("Recommendations")
+    recs = data.get("recommendations", [])
+    severity_color = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+    severity_bg = {"high": "#3d1515", "medium": "#3d2e00", "low": "#0d2d0d"}
+
+    for rec in recs:
+        sev = rec.get("severity", "low")
+        icon = severity_color.get(sev, "⚪")
+        bg = severity_bg.get(sev, "#1e1e2e")
+        st.markdown(
+            f"<div style='background:{bg};border-left:4px solid;"
+            f"padding:10px 14px;border-radius:4px;margin-bottom:8px'>"
+            f"<b>{icon} [{rec['type'].upper()}]</b> {rec['message']}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Recurring issues
+    recurring = data.get("recurring_issues", [])
+    if recurring:
+        st.subheader("Recurring Issues (Same Customer, 2+ Tickets)")
+        rec_df = pd.DataFrame(recurring)
+        st.dataframe(rec_df, use_container_width=True, hide_index=True)
+
+    st.caption(f"Generated at: {data.get('generated_at', '')[:19].replace('T', ' ')} UTC")
+
 
 # ── Page: Submit Ticket ───────────────────────────────────────────────────────
 

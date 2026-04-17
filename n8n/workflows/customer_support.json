@@ -1,5 +1,5 @@
 {
-  "name": "AOB — Customer Support Automation",
+  "name": "AOB — Customer Support Automation (v2)",
   "nodes": [
     {
       "parameters": {
@@ -16,7 +16,7 @@
     },
     {
       "parameters": {
-        "functionCode": "// Validate and normalize the incoming ticket payload\nconst body = $input.first().json;\nconst required = ['customer_name', 'customer_email', 'subject', 'message'];\nfor (const field of required) {\n  if (!body[field]) {\n    throw new Error(`Missing required field: ${field}`);\n  }\n}\nconst emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nif (!emailRegex.test(body.customer_email)) {\n  throw new Error('Invalid customer_email format');\n}\nreturn [{\n  json: {\n    customer_name: body.customer_name.trim(),\n    customer_email: body.customer_email.toLowerCase().trim(),\n    subject: body.subject.trim(),\n    message: body.message.trim(),\n    source: 'n8n_webhook',\n    received_at: new Date().toISOString()\n  }\n}];"
+        "functionCode": "const body = $input.first().json;\nconst required = ['customer_name','customer_email','subject','message'];\nfor (const f of required) {\n  if (!body[f] || !String(body[f]).trim()) {\n    throw new Error(`Missing or empty field: ${f}`);\n  }\n}\nconst emailRe = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nif (!emailRe.test(body.customer_email)) {\n  throw new Error('Invalid email format');\n}\nif (body.message.length < 10) {\n  throw new Error('Message too short (minimum 10 characters)');\n}\nreturn [{\n  json: {\n    customer_name: body.customer_name.trim(),\n    customer_email: body.customer_email.toLowerCase().trim(),\n    subject: body.subject.trim().slice(0, 500),\n    message: body.message.trim(),\n    source: 'n8n_webhook',\n    received_at: new Date().toISOString()\n  }\n}];"
       },
       "name": "Validate & Normalize",
       "type": "n8n-nodes-base.function",
@@ -37,22 +37,71 @@
           "source": "n8n_webhook"
         },
         "options": {
-          "timeout": 30000
+          "timeout": 15000,
+          "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 3 } }
         }
       },
-      "name": "POST to AI Backend",
+      "name": "POST to AI Backend (attempt 1)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [680, 300]
+      "position": [680, 300],
+      "continueOnFail": true
     },
     {
       "parameters": {
-        "functionCode": "// Parse the backend response and determine routing\nconst response = $input.first().json;\nconst ticket_id = response.ticket_id;\nconst success = response.success;\nreturn [{\n  json: {\n    ticket_id,\n    success,\n    summary: response.summary || 'Processing in background',\n    timestamp: new Date().toISOString()\n  }\n}];"
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.error !== undefined || $json.success === false }}",
+              "value2": true
+            }
+          ]
+        }
       },
-      "name": "Parse Response",
-      "type": "n8n-nodes-base.function",
+      "name": "Request Failed?",
+      "type": "n8n-nodes-base.if",
       "typeVersion": 1,
       "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "name": "Wait 3s Before Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [900, 460]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/tickets/webhook",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "customer_name": "={{ $('Validate & Normalize').item.json.customer_name }}",
+          "customer_email": "={{ $('Validate & Normalize').item.json.customer_email }}",
+          "subject": "={{ $('Validate & Normalize').item.json.subject }}",
+          "message": "={{ $('Validate & Normalize').item.json.message }}",
+          "source": "n8n_webhook_retry"
+        },
+        "options": { "timeout": 20000 }
+      },
+      "name": "POST to AI Backend (retry)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1120, 460],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "functionCode": "const r1 = $('POST to AI Backend (attempt 1)').item.json;\nconst r2 = $('POST to AI Backend (retry)').item;\nconst result = r1.ticket_id ? r1 : (r2 ? r2.json : null);\nconst success = result && result.ticket_id;\nreturn [{\n  json: {\n    ticket_id: success ? result.ticket_id : null,\n    success: !!success,\n    summary: success ? result.summary : 'Both attempts failed',\n    queued: success ? result.summary : null,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Merge Attempt Results",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1340, 380]
     },
     {
       "parameters": {
@@ -65,33 +114,49 @@
           ]
         }
       },
-      "name": "Success?",
+      "name": "Successfully Queued?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [1120, 300]
+      "position": [1560, 380]
+    },
+    {
+      "parameters": {
+        "functionCode": "const d = $input.first().json;\nconst queued = d.summary || '';\nconst position = queued.includes('Position') ? queued : 'You are in queue.';\nreturn [{ json: {\n  status: 'accepted',\n  ticket_id: d.ticket_id,\n  message: `Your request has been received and is being processed. ${position} You will receive an email update shortly.`,\n  timestamp: d.timestamp\n}}];"
+      },
+      "name": "Build Success Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1780, 280]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={ \"status\": \"accepted\", \"ticket_id\": \"{{ $json.ticket_id }}\", \"message\": \"Your request is being processed. You will receive an email shortly.\" }"
+        "responseBody": "={{ JSON.stringify($json) }}"
       },
       "name": "Respond 202 Accepted",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1340, 200]
+      "position": [2000, 280]
+    },
+    {
+      "parameters": {
+        "functionCode": "const original = $('Validate & Normalize').item.json;\nreturn [{ json: {\n  status: 'error',\n  message: 'Our system is temporarily unavailable. Your request has been logged and our team will follow up within 2 hours.',\n  customer_email: original.customer_email,\n  customer_name: original.customer_name,\n  subject: original.subject,\n  timestamp: new Date().toISOString()\n}}];"
+      },
+      "name": "Build Error Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1780, 480]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={ \"status\": \"error\", \"message\": \"Failed to process ticket. Please try again.\" }",
-        "options": {
-          "responseCode": 500
-        }
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": 503 }
       },
-      "name": "Respond 500 Error",
+      "name": "Respond 503 + Log Failure",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1340, 400]
+      "position": [2000, 480]
     }
   ],
   "connections": {
@@ -99,28 +164,40 @@
       "main": [[{"node": "Validate & Normalize", "type": "main", "index": 0}]]
     },
     "Validate & Normalize": {
-      "main": [[{"node": "POST to AI Backend", "type": "main", "index": 0}]]
+      "main": [[{"node": "POST to AI Backend (attempt 1)", "type": "main", "index": 0}]]
     },
-    "POST to AI Backend": {
-      "main": [[{"node": "Parse Response", "type": "main", "index": 0}]]
+    "POST to AI Backend (attempt 1)": {
+      "main": [[{"node": "Request Failed?", "type": "main", "index": 0}]]
     },
-    "Parse Response": {
-      "main": [[{"node": "Success?", "type": "main", "index": 0}]]
-    },
-    "Success?": {
+    "Request Failed?": {
       "main": [
-        [{"node": "Respond 202 Accepted", "type": "main", "index": 0}],
-        [{"node": "Respond 500 Error", "type": "main", "index": 0}]
+        [{"node": "Merge Attempt Results", "type": "main", "index": 0}],
+        [{"node": "Wait 3s Before Retry", "type": "main", "index": 0}]
       ]
+    },
+    "Wait 3s Before Retry": {
+      "main": [[{"node": "POST to AI Backend (retry)", "type": "main", "index": 0}]]
+    },
+    "POST to AI Backend (retry)": {
+      "main": [[{"node": "Merge Attempt Results", "type": "main", "index": 0}]]
+    },
+    "Merge Attempt Results": {
+      "main": [[{"node": "Successfully Queued?", "type": "main", "index": 0}]]
+    },
+    "Successfully Queued?": {
+      "main": [
+        [{"node": "Build Success Response", "type": "main", "index": 0}],
+        [{"node": "Build Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Build Success Response": {
+      "main": [[{"node": "Respond 202 Accepted", "type": "main", "index": 0}]]
+    },
+    "Build Error Response": {
+      "main": [[{"node": "Respond 503 + Log Failure", "type": "main", "index": 0}]]
     }
   },
   "active": true,
-  "settings": {
-    "executionOrder": "v1"
-  },
-  "versionId": "1",
-  "meta": {
-    "templateCredsSetupCompleted": true
-  },
-  "tags": ["support", "automation", "ai"]
+  "settings": { "executionOrder": "v1" },
+  "tags": ["support", "automation", "ai", "v2"]
 }
